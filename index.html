@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<title>Task Load Index (TLX)</title>
+		<link rel="stylesheet" href="http://fonts.googleapis.com/css?family=Open+Sans:400,700">
+		<link rel="stylesheet" href="setup/css/jquery-ui-1.9.2.custom.min.css">
+		<link rel="stylesheet" href="setup/css/default.css?v=sus-labels">
+	</head>
+	<body>
+		<article>
+			<header>
+				<h1>Task Load Index (TLX)</h1>
+			</header>
+			<section class="step_0">
+				<h2>Step 0: overview of TLX per participant per task</h2>
+				<div id="container"></div>
+				<button id="go_step_1" type="button">Continue to step 1</button>
+				<button id="export_csv" type="button" disabled>Export CSV</button>
+				<div class="review_edit">
+					<h3>Review or edit existing data</h3>
+					<form id="review_form">
+						<label for="review_proband">Participant</label>
+						<select id="review_proband"></select>
+						<label for="review_task">Task</label>
+						<select id="review_task"></select>
+						<label for="review_type">Questionnaire</label>
+						<select id="review_type">
+							<option value="tlx">NASA TLX</option>
+							<option value="embodiment">System Usability Scale</option>
+							<option value="additional">Additional questions</option>
+						</select>
+						<button id="review_data" type="button" disabled>Review/Edit</button>
+					</form>
+					<p class="review_error"></p>
+				</div>
+			</section>
+			<section class="step_1">
+				<h2>Step 1: choose participant and task</h2>
+				<div class="cf">
+					<section class="first">
+						<h3>Participant</h3>
+						<h4><label for="create_proband_name">Create new participant</label></h4>
+						<form class="create_participant_form">
+							<input type="text" id="create_proband_name" placeholder="Name" required>
+							<input type="text" id="create_proband_camipro" placeholder="Camipro number" required>
+							<input type="submit" value="Create">
+						</form>
+						<h4>Choose participant</h4>
+						<form class="list">
+							<div>
+							</div>
+						</form>
+					</section>
+					<section class="second">
+						<h3>Task</h3>
+						<h4><label for="create_task">Create new task</label></h4>
+						<form>
+							<input type="text" id="create_task" required>
+							<input type="submit" value="Create">
+						</form>
+						<h4>Choose task</h4>
+						<form class="list">
+							<div>
+							</div>
+						</form>
+					</section>
+				</div>
+				<h3>Questionnaire</h3>
+				<form class="questionnaire_toggle">
+					<div>
+						<input type="radio" name="questionnaire" id="questionnaire_tlx" value="tlx" checked>
+						<label for="questionnaire_tlx">NASA TLX</label>
+					</div>
+					<div>
+						<input type="radio" name="questionnaire" id="questionnaire_embodiment" value="embodiment">
+						<label for="questionnaire_embodiment">System Usability Scale</label>
+					</div>
+					<div>
+						<input type="radio" name="questionnaire" id="questionnaire_additional" value="additional">
+						<label for="questionnaire_additional">Additional questions</label>
+					</div>
+				</form>
+				<button id="step_1_continue" type="button">Continue to step 2</button>
+				<p class="go_back">or go <a href="#">back to the overview page</a></p>
+			</section>
+			<section class="step_2">
+				<h2>Step 2: rating scales</h2>
+				<section>
+					<h3>Mental demand</h3>
+					<p>How mentally demanding was the task?</p>
+					<div class="slider"></div>
+				</section>
+				<section>
+					<h3>Physical demand</h3>
+					<p>How physically demanding was the task?</p>
+					<div class="slider"></div>
+				</section>
+				<section>
+					<h3>Temporal demand</h3>
+					<p>How hurried or rushed was the pace of the task?</p>
+					<div class="slider"></div>
+				</section>
+				<section>
+					<h3>Performance</h3>
+					<p>How successful were you in accomplishing what you were asked to do?</p>
+					<div class="slider performance"></div>
+				</section>
+				<section>
+					<h3>Effort</h3>
+					<p>How hard did you have to work to accomplish your level of performance?</p>
+					<div class="slider"></div>
+				</section>
+				<section>
+					<h3>Frustration</h3>
+					<p>How insecure, discouraged, irritated, stressed, and annoyed were you?</p>
+					<div class="slider"></div>
+				</section>
+				<button>Continue to step 3</button>
+			</section>
+			<section class="step_3">
+				<h2>Step 3: pair-wise comparison of factors</h2>
+				<p class="alt">Select the member of each pair that provided the most significant source of workload:</p>
+			</section>
+			<section class="step_additional">
+				<h2>Additional questions</h2>
+				<section>
+					<h3>Which interface do you prefer?</h3>
+					<div class="additional_choice" data-index="0">
+						<label><input type="radio" name="additional_preference" value="Joystick"> Joystick</label>
+						<label><input type="radio" name="additional_preference" value="Body-motion control"> Body-motion control</label>
+						<label><input type="radio" name="additional_preference" value="Same"> Same</label>
+					</div>
+				</section>
+				<section>
+					<h3>Do you play video games (yes/no), how many hours per week?</h3>
+					<input class="additional_text" data-index="1" type="text">
+				</section>
+				<section>
+					<h3>Do you have previous experience with teleoperation (e.g. drone flying)?</h3>
+					<input class="additional_text" data-index="2" type="text">
+				</section>
+				<section>
+					<h3>Do you have any general feedback on the experiment?</h3>
+					<textarea class="additional_text additional_text_large" data-index="3" rows="12"></textarea>
+				</section>
+				<button id="additional_continue" type="button">Continue to results</button>
+			</section>
+			<section class="step_embodiment">
+				<h2>System Usability Scale</h2>
+				<section>
+					<h3>I think that I would like to use this interface frequently.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I found the interface unnecessarily complex.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I thought the interface was easy to use.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I think that I would need the support of a technical person to be able to use this interface.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I found the various functions in this interface were well integrated.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I thought there was too much inconsistency in this interface.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I would imagine that most people would learn to use this interface very quickly.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I found the interface very cumbersome to use.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I felt very confident using the interface.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<section>
+					<h3>I needed to learn a lot of things before I could get going with this interface.</h3>
+					<div class="slider embodiment_slider"></div>
+				</section>
+				<button id="embodiment_continue" type="button">Continue to results</button>
+			</section>
+			<section class="step_4">
+				<h2>Step 4: resulting data</h2>
+				<div class="results"></div>
+				<div class="edit_actions">
+					<button id="edit_toggle" type="button">Edit data</button>
+				</div>
+				<div class="edit_panel" style="display: none;"></div>
+				<button id="step_4_back" type="button">Back to the overview page</button>
+			</section>
+		</article>
+		<script src="setup/js/jquery-1.8.3.min.js"></script>
+		<script src="setup/js/jquery-ui-1.9.2.custom.min.js"></script>
+		<script src="setup/js/highcharts-2.3.3.min.js"></script>
+		<script src="setup/js/default.js"></script>
+	</body>
+</html>
