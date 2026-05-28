@@ -376,11 +376,13 @@ $(document).ready(function() {
 		],
 		additional_questions = [
 			"Which interface do you prefer?",
+			"Which interface gives you more motion sickness?",
 			"Do you play video games (yes/no), how many hours per week?",
 			"Do you have previous experience with teleoperation (e.g. drone flying)?",
 			"Do you have any general feedback on the experiment?"
 		],
 		additional_question_types = [
+			"choice",
 			"choice",
 			"text",
 			"text",
@@ -673,12 +675,23 @@ $(document).ready(function() {
 			obj.answers = defaults.slice();
 			return obj;
 		}
-		if (obj.answers.length === 7 && additional_questions.length === 4) {
+		if (obj.answers.length === 4 && additional_questions.length === 5) {
+			obj.answers = [
+				obj.answers[0] || defaults[0],
+				defaults[1],
+				obj.answers[1] || defaults[2],
+				obj.answers[2] || defaults[3],
+				obj.answers[3] || defaults[4]
+			];
+			return obj;
+		}
+		if (obj.answers.length === 7 && additional_questions.length === 5) {
 			obj.answers = [
 				defaults[0],
-				obj.answers[4] || defaults[1],
-				obj.answers[5] || defaults[2],
-				obj.answers[6] || defaults[3]
+				defaults[1],
+				obj.answers[4] || defaults[2],
+				obj.answers[5] || defaults[3],
+				obj.answers[6] || defaults[4]
 			];
 			return obj;
 		}
