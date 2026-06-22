@@ -1,0 +1,11 @@
+*.csv
+*.pdf
+*.xlsx
+*.dmg
+*.bak
+__pycache__/
+*.pyc
+.DS_Store
+Icon?
+setup/js/preload_nasa_tlx_exports.js
+scripts/plot_tlx_box_selection.json

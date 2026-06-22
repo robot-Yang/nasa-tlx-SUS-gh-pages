@@ -4,6 +4,7 @@ Plot NASA TLX box plots for all available tasks, filtered by participant(s).
 
 Usage:
   python3 scripts/plot_tlx_box.py /path/to/file.csv
+  python3 scripts/plot_tlx_box.py /path/to/file1.csv /path/to/file2.csv
   python3 scripts/plot_tlx_box.py /path/to/file.csv --person "P01" --tasks "Task 1,Task 2,Task 3"
   python3 scripts/plot_tlx_box.py /path/to/file.csv --person-col "Participant" --person "P01" --person "P02"
 """
@@ -28,12 +29,15 @@ except Exception:
     messagebox = None
 
 import matplotlib.pyplot as plt
+plt.rcParams.update({"font.size": 15})
 
 try:
-    from scipy.stats import mannwhitneyu
+    from scipy.stats import wilcoxon
 except Exception:
-    mannwhitneyu = None
+    wilcoxon = None
 
+
+DEFAULT_CSV_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
 PERSON_COL_CANDIDATES = [
     "Participant",
@@ -60,12 +64,39 @@ CAMIPRO_COL_CANDIDATES = [
     "CamiproID",
     "Camipro ID",
 ]
+TASK_NAME_ALIASES = {
+    "controller": "joystick",
+    "body": "body-motion control",
+}
 
 ADDITIONAL_QUESTION_TITLES = {
-    "Additional Q1": "Liking",
-    "Additional Q2": "Swarm Awareness",
-    "Additional Q3": "Environment Awareness",
+    "Additional Q1": "Interface Preference",
+    "Additional Q2": "Motion Sickness",
+    "Additional Q3": "Video Games",
+    "Additional Q4": "Teleoperation Experience",
+    "Additional Q5": "Feedback",
 }
+INTERFACE_CHOICE_ORDER = ["Joystick", "Body-motion control"]
+# x-axis display labels, matching the trajectory plots (plot 1): horizontal "Joystick" / "Body-control"
+AXIS_LABELS = {"joystick": "Joystick", "controller": "Joystick", "body-motion control": "Body-control", "body": "Body-control"}
+CHOICE_DISPLAY = {"Joystick": "Joystick", "Body-motion control": "Body-control"}
+
+
+def axis_label(name):
+    return AXIS_LABELS.get(str(name).strip().lower(), str(name))
+
+INTERFACE_CHOICE_KEY_MAP = {
+    "joystick": "Joystick",
+    "controller": "Joystick",
+    "body-motion control": "Body-motion control",
+    "body motion control": "Body-motion control",
+    "body": "Body-motion control",
+    "same": "Same",
+}
+INTERFACE_CHOICE_QUESTION_SPECS = [
+    ("Additional Q1", "Preferred Interface"),
+    ("Additional Q2", "More Motion Sickness"),
+]
 HAPTIC_RANK_COL_CANDIDATES = ["Additional Q4"]
 HAPTIC_INFO_ORDER = [
     "Horizontal distribution of swarm",
@@ -87,6 +118,12 @@ SELECTION_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plot
 
 def task_order_bucket(task_name):
     t = (task_name or "").strip().lower()
+    # Keep joystick on the left and body-motion control on the right,
+    # consistent with the trajectory-metric plots.
+    if "joystick" in t or "controller" in t:
+        return -2
+    if "body" in t:
+        return -1
     if "without haptic" in t or ("fpv" in t and "only" in t):
         return 0
     if "minimap" in t or "mini map" in t or ("fpv" in t and "map" in t):
@@ -94,6 +131,19 @@ def task_order_bucket(task_name):
     if "with haptic" in t or ("fpv" in t and "haptic" in t):
         return 2
     return 99
+
+
+def normalize_task_name(task_name):
+    text = str(task_name).strip()
+    if not text or text.lower() == "nan":
+        return task_name
+    return TASK_NAME_ALIASES.get(text.lower(), text)
+
+
+def normalize_task_column(df, task_col):
+    result = df.copy()
+    result[task_col] = result[task_col].apply(normalize_task_name)
+    return result
 
 
 def order_tasks_preferred(tasks):
@@ -127,34 +177,34 @@ def save_participant_selection_cache(selected_people):
         return
 
 
-def pick_csv():
+def pick_csv_files():
     if not tk or not filedialog:
-        return ""
+        return []
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     try:
-        path = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             parent=root,
-            title="Select NASA TLX CSV export",
+            title="Select NASA TLX CSV export(s)",
+            initialdir=DEFAULT_CSV_DIR,
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
         )
     finally:
         root.destroy()
-    return path
+    return list(paths)
 
 
-def latest_csv_in_downloads():
-    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-    if not os.path.isdir(downloads_dir):
+def latest_csv_in_default_dir():
+    if not os.path.isdir(DEFAULT_CSV_DIR):
         return ""
 
     latest_path = ""
     latest_mtime = -1.0
-    for name in os.listdir(downloads_dir):
+    for name in os.listdir(DEFAULT_CSV_DIR):
         if not name.lower().endswith(".csv"):
             continue
-        full_path = os.path.join(downloads_dir, name)
+        full_path = os.path.join(DEFAULT_CSV_DIR, name)
         if not os.path.isfile(full_path):
             continue
         mtime = os.path.getmtime(full_path)
@@ -162,6 +212,19 @@ def latest_csv_in_downloads():
             latest_mtime = mtime
             latest_path = full_path
     return latest_path
+
+
+def read_csv_files(paths):
+    frames = []
+    for path in paths:
+        df = pd.read_csv(path)
+        df["Source CSV"] = os.path.basename(path)
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def find_columns(df, suffix):
@@ -196,6 +259,25 @@ def compute_tlx(df):
     result["TLX_Raw"] = raw_tlx
     result["TLX_Used"] = np.where(weight_sum > 0, weighted_tlx, raw_tlx)
     result["TLX_Source"] = np.where(weight_sum > 0, "weighted", "raw")
+
+    return result
+
+
+def compute_sus(df):
+    result = df.copy()
+    sus_cols = ["SUS Q%d" % i for i in range(1, 11) if "SUS Q%d" % i in result.columns]
+    if "SUS Score" in result.columns:
+        result["SUS_Score"] = pd.to_numeric(result["SUS Score"], errors="coerce")
+    else:
+        result["SUS_Score"] = np.nan
+
+    if len(sus_cols) == 10:
+        answers = result[sus_cols].apply(pd.to_numeric, errors="coerce")
+        odd_items = answers.iloc[:, [0, 2, 4, 6, 8]] - 1
+        even_items = 5 - answers.iloc[:, [1, 3, 5, 7, 9]]
+        complete_rows = answers.notna().all(axis=1)
+        computed = (odd_items.sum(axis=1) + even_items.sum(axis=1)) * 2.5
+        result.loc[complete_rows, "SUS_Score"] = result.loc[complete_rows, "SUS_Score"].fillna(computed.loc[complete_rows])
 
     return result
 
@@ -343,8 +425,11 @@ def maybe_save_edited_csv(df, original_path):
     if not yes_no_prompt("Save edited participant data to a new CSV?", default=False):
         return
 
-    base, ext = os.path.splitext(original_path)
-    default_path = base + "_edited" + (ext or ".csv")
+    if original_path:
+        base, ext = os.path.splitext(original_path)
+        default_path = base + "_edited" + (ext or ".csv")
+    else:
+        default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_edited.csv")
     target_path = input("Output CSV path (Enter for '%s'): " % default_path).strip()
     if not target_path:
         target_path = default_path
@@ -367,11 +452,12 @@ def plot_questionnaire_box(df, task_col, person_col, tasks, prefix, title):
             participant_count = 0
         else:
             values = task_rows[cols].apply(pd.to_numeric, errors="coerce").mean(axis=1, skipna=True)
-            values = values.dropna()
+            values.index = task_rows[person_col].astype(str).values
+            values = values.dropna().groupby(level=0).mean()
             participant_count = int(task_rows[person_col].astype(str).nunique())
         values_by_task[task] = values
         data.append(values)
-        labels.append("%s (%d)" % (task, participant_count))
+        labels.append(axis_label(task))
 
     if not any(len(values) for values in data):
         return None
@@ -382,7 +468,7 @@ def plot_questionnaire_box(df, task_col, person_col, tasks, prefix, title):
     ax.set_ylabel("Rating")
     plt.xticks(rotation=20, ha="right")
 
-    tests = run_mann_whitney_tests(values_by_task)
+    tests = run_wilcoxon_tests(values_by_task)
     annotate_significance(ax, tasks, values_by_task, tests)
 
     fig.tight_layout()
@@ -402,11 +488,11 @@ def plot_questionnaire_questions_separately(df, task_col, person_col, tasks, pre
         values_by_task = {}
         for task in tasks:
             task_rows = df[df[task_col].astype(str) == task]
-            values = pd.to_numeric(task_rows[col], errors="coerce").dropna()
+            values = index_values_by_participant(task_rows, col, person_col)
             participant_count = int(task_rows[person_col].astype(str).nunique()) if not task_rows.empty else 0
             values_by_task[task] = values
             data.append(values)
-            labels.append("%s (%d)" % (task, participant_count))
+            labels.append(axis_label(task))
 
         if not any(len(values) for values in data):
             continue
@@ -418,7 +504,7 @@ def plot_questionnaire_questions_separately(df, task_col, person_col, tasks, pre
         ax.set_title(question_title)
         ax.set_ylabel("Rating")
         plt.xticks(rotation=20, ha="right")
-        annotate_significance(ax, tasks, values_by_task, run_mann_whitney_tests(values_by_task))
+        annotate_significance(ax, tasks, values_by_task, run_wilcoxon_tests(values_by_task))
         fig.tight_layout()
         figures.append(fig)
         values_by_column[col] = values_by_task
@@ -426,17 +512,59 @@ def plot_questionnaire_questions_separately(df, task_col, person_col, tasks, pre
     return figures, values_by_column
 
 
-def collect_questionnaire_values_by_column(df, task_col, tasks, prefix):
+def collect_questionnaire_values_by_column(df, task_col, tasks, prefix, person_col=None):
     cols = find_prefix_columns(df, prefix)
     values_by_column = {}
     for col in cols:
         values_by_task = {}
         for task in tasks:
             task_rows = df[df[task_col].astype(str) == task]
-            values = pd.to_numeric(task_rows[col], errors="coerce").dropna()
+            values = index_values_by_participant(task_rows, col, person_col)
             values_by_task[task] = values
-        values_by_column[col] = values_by_task
+        if any(len(values) for values in values_by_task.values()):
+            values_by_column[col] = values_by_task
     return values_by_column
+
+
+def normalize_interface_choice(value):
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    key = " ".join(text.lower().replace("_", " ").split())
+    return INTERFACE_CHOICE_KEY_MAP.get(key, "")
+
+
+def collect_interface_choice_counts(df, col_name):
+    if col_name not in df.columns:
+        return {}
+
+    counts = {choice: 0 for choice in INTERFACE_CHOICE_ORDER}
+    has_values = False
+    for value in df[col_name]:
+        choice = normalize_interface_choice(value)
+        # "Same" responses are not counted for either interface.
+        if choice in counts:
+            counts[choice] += 1
+            has_values = True
+
+    return counts if has_values else {}
+
+
+def collect_interface_choice_panels(df):
+    panels = []
+    for col_name, title in INTERFACE_CHOICE_QUESTION_SPECS:
+        counts = collect_interface_choice_counts(df, col_name)
+        if counts:
+            panels.append((title, counts))
+    return panels
+
+
+def print_interface_choice_summary(choice_panels):
+    for title, counts in choice_panels:
+        print("")
+        print("=== Choice Counts: %s ===" % title)
+        parts = ["%s=%d" % (choice, counts.get(choice, 0)) for choice in INTERFACE_CHOICE_ORDER]
+        print(", ".join(parts))
 
 
 def draw_metric_boxplot(ax, task_order, labels, values_by_task, title, ylabel):
@@ -448,30 +576,62 @@ def draw_metric_boxplot(ax, task_order, labels, values_by_task, title, ylabel):
     boxplot_with_labels(ax, data, labels, showmeans=True)
     ax.set_title(title)
     ax.set_ylabel(ylabel)
-    ax.tick_params(axis="x", labelrotation=20)
+    ax.tick_params(axis="x", labelrotation=0)
     for label in ax.get_xticklabels():
-        label.set_ha("right")
-    annotate_significance(ax, task_order, values_by_task, run_mann_whitney_tests(values_by_task))
+        label.set_ha("center")
+    annotate_significance(ax, task_order, values_by_task, run_wilcoxon_tests(values_by_task))
     return True
 
 
-def plot_combined_dashboard(task_order, labels, panel_specs):
+def draw_choice_barplot(ax, counts, title):
+    if not counts:
+        ax.set_visible(False)
+        return False
+
+    values = [counts.get(choice, 0) for choice in INTERFACE_CHOICE_ORDER]
+
+    if not any(values):
+        ax.set_visible(False)
+        return False
+
+    # Match the box positions, width, and x-limits of the NASA-TLX / SUS boxplots
+    # so the bars render at the same width as the boxes.
+    x = BOX_X_START + BOX_X_STEP * np.arange(len(INTERFACE_CHOICE_ORDER))
+    ax.bar(x, values, width=0.5, color="#4c78a8")
+    ax.set_title(title)
+    ax.set_ylabel("Count")
+    ax.set_xticks(x)
+    ax.set_xticklabels([CHOICE_DISPLAY[c] for c in INTERFACE_CHOICE_ORDER])
+    ax.set_xlim(x[0] - 0.45, x[-1] + 0.45)
+    ax.tick_params(axis="x", labelrotation=0)
+    for label in ax.get_xticklabels():
+        label.set_ha("center")
+    return True
+
+
+def plot_combined_dashboard(task_order, labels, panel_specs, choice_panel_specs=None):
     valid_specs = []
     for title, ylabel, values_by_task in panel_specs:
         if values_by_task and any(len(values_by_task.get(task, [])) for task in task_order):
-            valid_specs.append((title, ylabel, values_by_task))
+            valid_specs.append(("metric", title, ylabel, values_by_task))
+    for title, counts in (choice_panel_specs or []):
+        if counts and any(counts.values()):
+            valid_specs.append(("choice", title, "", counts))
     if not valid_specs:
         return None
 
     n = len(valid_specs)
-    rows = 1 if n <= 2 else 2
-    cols = int(np.ceil(float(n) / float(rows)))
-    fig, axes = plt.subplots(rows, cols, figsize=(max(8.6, cols * 5.8), max(4.6 * rows, 5.2)))
+    rows = 1
+    cols = n
+    fig, axes = plt.subplots(rows, cols, figsize=(3.6 * cols, 4.4))
     axes = np.atleast_1d(axes).flatten()
 
     for i, spec in enumerate(valid_specs):
-        title, ylabel, values_by_task = spec
-        draw_metric_boxplot(axes[i], task_order, labels, values_by_task, title, ylabel)
+        panel_type, title, ylabel, values_by_task = spec
+        if panel_type == "choice":
+            draw_choice_barplot(axes[i], values_by_task, title)
+        else:
+            draw_metric_boxplot(axes[i], task_order, labels, values_by_task, title, ylabel)
 
     for j in range(len(valid_specs), len(axes)):
         axes[j].set_visible(False)
@@ -481,12 +641,24 @@ def plot_combined_dashboard(task_order, labels, panel_specs):
     return fig
 
 
-def collect_task_values(df, task_col, tasks, value_col):
+def index_values_by_participant(task_rows, value_col, person_col):
+    """Numeric values for value_col, indexed by participant (one mean per participant).
+
+    Indexing by participant lets paired tests align the same person across tasks.
+    Falls back to the row index when no participant column is available.
+    """
+    values = pd.to_numeric(task_rows[value_col], errors="coerce")
+    if person_col is not None and person_col in task_rows.columns and not task_rows.empty:
+        values.index = task_rows[person_col].astype(str).values
+        return values.dropna().groupby(level=0).mean()
+    return values.dropna()
+
+
+def collect_task_values(df, task_col, tasks, value_col, person_col=None):
     values_by_task = {}
     for task in tasks:
         task_rows = df[df[task_col].astype(str) == task]
-        values = pd.to_numeric(task_rows[value_col], errors="coerce").dropna()
-        values_by_task[task] = values
+        values_by_task[task] = index_values_by_participant(task_rows, value_col, person_col)
     return values_by_task
 
 
@@ -514,23 +686,38 @@ def collect_task_questionnaire_means(df, task_col, tasks, prefix):
     return values_by_task
 
 
-def run_mann_whitney_tests(values_by_task):
+def run_wilcoxon_tests(values_by_task):
+    """Paired Wilcoxon signed-rank tests between every pair of tasks.
+
+    The study is within-subjects, so each participant contributes one value per
+    task. Values are paired on the shared participant index before testing.
+    """
     tests = []
-    if not values_by_task or mannwhitneyu is None:
+    if not values_by_task or wilcoxon is None:
         return tests
 
     tasks = list(values_by_task.keys())
     for task_a, task_b in combinations(tasks, 2):
-        values_a = values_by_task.get(task_a, pd.Series([], dtype=float))
-        values_b = values_by_task.get(task_b, pd.Series([], dtype=float))
-        if len(values_a) == 0 or len(values_b) == 0:
+        series_a = pd.Series(values_by_task.get(task_a, pd.Series([], dtype=float)))
+        series_b = pd.Series(values_by_task.get(task_b, pd.Series([], dtype=float)))
+        if len(series_a) == 0 or len(series_b) == 0:
+            continue
+        common = series_a.index.intersection(series_b.index)
+        paired = pd.concat(
+            [
+                pd.to_numeric(series_a.loc[common], errors="coerce"),
+                pd.to_numeric(series_b.loc[common], errors="coerce"),
+            ],
+            axis=1,
+        ).dropna()
+        if paired.empty:
             continue
         tests.append(
             {
                 "task_a": task_a,
                 "task_b": task_b,
-                "values_a": values_a,
-                "values_b": values_b,
+                "values_a": paired.iloc[:, 0],
+                "values_b": paired.iloc[:, 1],
             }
         )
 
@@ -539,12 +726,20 @@ def run_mann_whitney_tests(values_by_task):
         return tests
 
     for i in range(num_tests):
-        stat = mannwhitneyu(tests[i]["values_a"], tests[i]["values_b"], alternative="two-sided")
-        p_value = float(stat.pvalue)
-        tests[i]["U"] = float(stat.statistic)
+        values_a = tests[i]["values_a"]
+        values_b = tests[i]["values_b"]
+        try:
+            stat = wilcoxon(values_a, values_b, alternative="two-sided", zero_method="wilcox")
+            p_value = float(stat.pvalue)
+            statistic = float(stat.statistic)
+        except Exception:
+            p_value = float("nan")
+            statistic = float("nan")
+        tests[i]["statistic"] = statistic
         tests[i]["p"] = p_value
-        tests[i]["p_bonf"] = min(p_value * num_tests, 1.0)
-        tests[i]["significant"] = tests[i]["p_bonf"] < 0.05
+        tests[i]["p_bonf"] = min(p_value * num_tests, 1.0) if np.isfinite(p_value) else float("nan")
+        tests[i]["n_pairs"] = int(len(values_a))
+        tests[i]["significant"] = bool(np.isfinite(p_value) and tests[i]["p_bonf"] < 0.05)
 
     return tests
 
@@ -606,39 +801,38 @@ def annotate_significance(ax, task_order, values_by_task, tests):
     ax.set_ylim(top=base + len(significant) * step + 0.25 * y_span)
 
 
-def print_mann_whitney_analysis(values_by_task, title):
+def print_wilcoxon_analysis(values_by_task, title):
     if not values_by_task:
         return
 
     print("")
-    print("=== Mann-Whitney U: %s ===" % title)
+    print("=== Wilcoxon signed-rank: %s ===" % title)
 
-    if mannwhitneyu is None:
+    if wilcoxon is None:
         print("scipy is not available. Install with: pip install scipy")
         return
 
-    tests = run_mann_whitney_tests(values_by_task)
+    tests = run_wilcoxon_tests(values_by_task)
 
     if not tests:
-        print("Not enough data for pairwise tests.")
+        print("Not enough paired data for pairwise tests.")
         return
 
     alpha = 0.05
     bonf_alpha = alpha / float(len(tests))
-    print("Two-sided test, Bonferroni alpha=%.6f (%d comparisons)" % (bonf_alpha, len(tests)))
+    print("Two-sided paired test, Bonferroni alpha=%.6f (%d comparisons)" % (bonf_alpha, len(tests)))
 
     for test in tests:
         significant = "yes" if test["significant"] else "no"
         print(
-            "%s vs %s | U=%.3f | p=%.6g | p_bonf=%.6g | n1=%d n2=%d | significant=%s"
+            "%s vs %s | W=%.3f | p=%.6g | p_bonf=%.6g | n_pairs=%d | significant=%s"
             % (
                 test["task_a"],
                 test["task_b"],
-                test["U"],
+                test["statistic"],
                 test["p"],
                 test["p_bonf"],
-                len(test["values_a"]),
-                len(test["values_b"]),
+                test["n_pairs"],
                 significant,
             )
         )
@@ -660,6 +854,49 @@ def print_group_descriptives(values_by_task, title, task_order=None):
         mean = float(values.mean())
         sd = float(values.std(ddof=1)) if n > 1 else 0.0
         print("%s | n=%d | mean ± sd = %.1f ± %.1f" % (task, n, mean, sd))
+
+
+def format_score(value):
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return ""
+    return "%.1f" % float(numeric)
+
+
+def print_individual_participant_scores(df, person_col, task_col, task_order):
+    if df.empty:
+        return
+
+    score_columns = [
+        ("TLX", "TLX_Used"),
+        ("TLX Source", "TLX_Source"),
+        ("SUS", "SUS_Score"),
+    ]
+    for col in find_prefix_columns(df, "Additional Q"):
+        numeric_values = pd.to_numeric(df[col], errors="coerce")
+        if numeric_values.notna().any():
+            score_columns.append((ADDITIONAL_QUESTION_TITLES.get(col, col), col))
+
+    print("")
+    print("=== Individual Participant Scores ===")
+    header = ["Participant", "Task"] + [label for label, _ in score_columns]
+    print("\t".join(header))
+
+    people = unique_in_order(normalize_tokens(df[person_col].dropna().tolist()))
+    for person in people:
+        person_rows = df[df[person_col].astype(str) == person]
+        for task in task_order:
+            task_rows = person_rows[person_rows[task_col].astype(str) == task]
+            if task_rows.empty:
+                continue
+            row = task_rows.iloc[0]
+            output = [person, task]
+            for label, col in score_columns:
+                if col == "TLX_Source":
+                    output.append(str(row.get(col, "")).strip())
+                else:
+                    output.append(format_score(row.get(col, "")))
+            print("\t".join(output))
 
 
 def normalize_haptic_key(text):
@@ -1123,7 +1360,7 @@ def select_participants_gui(grouped_options, all_people):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Plot TLX box plots for all available tasks.")
-    parser.add_argument("path", nargs="?", help="Path to CSV file")
+    parser.add_argument("paths", nargs="*", help="Path(s) to CSV file(s)")
     parser.add_argument("--person-col", default="", help="Column name for participant")
     parser.add_argument("--person", action="append", default=[], help="Participant to include (repeatable)")
     parser.add_argument("--tasks", default="", help="Comma-separated list of tasks to include")
@@ -1132,14 +1369,17 @@ def parse_args(argv):
     return parser.parse_args(argv)
 
 
-def save_figures_to_pdf_files(figures, csv_path, pdf_path=""):
+def save_figures_to_pdf_files(figures, csv_paths, pdf_path=""):
     if not figures:
         return []
 
     if not pdf_path:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         output_dir = os.path.dirname(script_dir)
-        csv_stem = os.path.splitext(os.path.basename(csv_path))[0] if csv_path else "plots"
+        if len(csv_paths) == 1:
+            csv_stem = os.path.splitext(os.path.basename(csv_paths[0]))[0]
+        else:
+            csv_stem = "combined_csv"
         pdf_base = os.path.join(output_dir, csv_stem + "_plots")
     else:
         pdf_base = pdf_path[:-4] if pdf_path.lower().endswith(".pdf") else pdf_path
@@ -1156,26 +1396,33 @@ def save_figures_to_pdf_files(figures, csv_path, pdf_path=""):
 def main(argv=None):
     args = parse_args(argv or sys.argv[1:])
 
-    path = args.path or ""
-    if not path:
+    paths = list(args.paths or [])
+    if not paths:
         if args.no_gui:
-            path = latest_csv_in_downloads()
-            if path:
-                print("Using latest CSV:", path)
+            latest_path = latest_csv_in_default_dir()
+            if latest_path:
+                paths = [latest_path]
+                print("Using latest CSV:", latest_path)
         else:
-            choice = input("Type 'b' to browse for a CSV file, or press Enter to use the latest CSV in Downloads: ").strip().lower()
+            choice = input("Type 'b' to browse for CSV file(s), or press Enter to use the latest CSV in %s: " % DEFAULT_CSV_DIR).strip().lower()
             if choice == "b":
-                path = pick_csv()
+                paths = pick_csv_files()
             else:
-                path = latest_csv_in_downloads()
-                if path:
-                    print("Using latest CSV:", path)
-    if not path:
-        print("No CSV file selected/found. Pass a path: python3 scripts/plot_tlx_box.py /path/to/file.csv")
+                latest_path = latest_csv_in_default_dir()
+                if latest_path:
+                    paths = [latest_path]
+                    print("Using latest CSV:", latest_path)
+    if not paths:
+        print("No CSV file selected/found. Pass path(s): python3 scripts/plot_tlx_box.py /path/to/file1.csv /path/to/file2.csv")
         return 1
 
-    df = pd.read_csv(path)
-    df = compute_tlx(df)
+    if len(paths) > 1:
+        print("Combining CSV files:")
+        for csv_path in paths:
+            print("-", csv_path)
+
+    df = read_csv_files(paths)
+    df = compute_sus(compute_tlx(df))
 
     person_col = args.person_col or guess_column(df, PERSON_COL_CANDIDATES)
     if not person_col:
@@ -1192,17 +1439,18 @@ def main(argv=None):
         for col in df.columns:
             print("-", col)
         return 1
+    df = normalize_task_column(df, task_col)
 
     df, edited = edit_participant_info(df, person_col)
     if edited:
-        maybe_save_edited_csv(df, path)
+        maybe_save_edited_csv(df, paths[0] if len(paths) == 1 else "")
 
     people = unique_in_order(normalize_tokens(df[person_col].dropna().tolist()))
 
     selected_people = normalize_tokens(args.person)
     if not selected_people:
         if tk and not args.no_gui:
-            requested_tasks = normalize_tokens(args.tasks.split(",")) if args.tasks else []
+            requested_tasks = [normalize_task_name(task) for task in normalize_tokens(args.tasks.split(","))] if args.tasks else []
             task_groups = build_task_participant_groups(df, person_col, task_col, requested_tasks if requested_tasks else None)
             selected_people = select_participants_gui(task_groups, people) or []
             if not selected_people:
@@ -1230,7 +1478,7 @@ def main(argv=None):
 
     selected_tasks = []
     if args.tasks:
-        selected_tasks = normalize_tokens(args.tasks.split(","))
+        selected_tasks = [normalize_task_name(task) for task in normalize_tokens(args.tasks.split(","))]
         selected_tasks = order_tasks_preferred(selected_tasks)
     if not selected_tasks:
         selected_tasks = tasks
@@ -1247,34 +1495,37 @@ def main(argv=None):
         values = pd.to_numeric(task_rows["TLX_Used"], errors="coerce").dropna()
         participant_count = int(task_rows[person_col].astype(str).nunique())
         data.append(values)
-        labels.append("%s (%d)" % (task, participant_count))
+        labels.append(axis_label(task))
 
     if not any(len(values) for values in data):
         print("No TLX values available after filtering.")
         return 1
 
-    tlx_values = collect_task_values(df_tasks, task_col, selected_tasks, "TLX_Used")
+    tlx_values = collect_task_values(df_tasks, task_col, selected_tasks, "TLX_Used", person_col)
+    print_individual_participant_scores(df_tasks, person_col, task_col, selected_tasks)
     print_group_descriptives(tlx_values, "TLX", selected_tasks)
-    print_mann_whitney_analysis(tlx_values, "TLX")
-    additional_by_column = collect_questionnaire_values_by_column(df_tasks, task_col, selected_tasks, "Additional Q")
+    print_wilcoxon_analysis(tlx_values, "TLX")
+    additional_by_column = collect_questionnaire_values_by_column(df_tasks, task_col, selected_tasks, "Additional Q", person_col)
     for col_name in additional_by_column:
         print_group_descriptives(additional_by_column[col_name], col_name, selected_tasks)
-        print_mann_whitney_analysis(additional_by_column[col_name], col_name)
+        print_wilcoxon_analysis(additional_by_column[col_name], col_name)
+    interface_choice_panels = collect_interface_choice_panels(df_tasks)
+    print_interface_choice_summary(interface_choice_panels)
     print_haptic_importance_summary(df_tasks, task_col, selected_tasks)
-    embodiment_values = collect_task_questionnaire_means(df_tasks, task_col, selected_tasks, "SUS Q")
-    print_group_descriptives(embodiment_values, "System Usability Scale (row mean)", selected_tasks)
-    print_mann_whitney_analysis(embodiment_values, "System Usability Scale (row mean)")
+    sus_values = collect_task_values(df_tasks, task_col, selected_tasks, "SUS_Score", person_col)
+    print_group_descriptives(sus_values, "SUS", selected_tasks)
+    print_wilcoxon_analysis(sus_values, "SUS")
 
     panel_specs = [("NASA TLX", "TLX score", tlx_values)]
     for col_name in additional_by_column:
         panel_specs.append((ADDITIONAL_QUESTION_TITLES.get(col_name, col_name), "Rating", additional_by_column[col_name]))
-    if embodiment_values:
-        panel_specs.append(("System Usability Scale (mean)", "Rating", embodiment_values))
+    if sus_values:
+        panel_specs.append(("System Usability Scale", "SUS score", sus_values))
 
-    fig_combined = plot_combined_dashboard(selected_tasks, labels, panel_specs)
+    fig_combined = plot_combined_dashboard(selected_tasks, labels, panel_specs, interface_choice_panels)
     figures = [fig_combined] if fig_combined is not None else []
 
-    saved_pdfs = save_figures_to_pdf_files(figures, path, args.pdf)
+    saved_pdfs = save_figures_to_pdf_files(figures, paths, args.pdf)
     if saved_pdfs:
         print("Saved plot PDFs:")
         for out_path in saved_pdfs:

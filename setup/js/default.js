@@ -821,6 +821,23 @@ $(document).ready(function() {
 		};
 	}
 
+	function calculate_sus_score(answers) {
+		if (!answers || answers.length !== embodiment_questions.length) {
+			return null;
+		}
+
+		var adjusted_sum = 0;
+		for (var i = 0; i < embodiment_questions.length; i++) {
+			var value = parseInt(answers[i], 10);
+			if (isNaN(value)) {
+				return null;
+			}
+			adjusted_sum += (i % 2 === 0) ? value - 1 : 5 - value;
+		}
+
+		return adjusted_sum * 2.5;
+	}
+
 	function render_edit_panel(proband_id, task_id, task) {
 		var ratings = (task.data && task.data.slider_value) ? task.data.slider_value : [],
 			weights = (task.data && task.data.button_clicks) ? task.data.button_clicks : [],
@@ -1240,13 +1257,15 @@ $(document).ready(function() {
 	}
 
 	function build_embodiment_output(answers) {
-		var output = "<table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody>";
+		var sus_score = calculate_sus_score(answers),
+			output = "<table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody>";
 
 		for (var i = 0; i < embodiment_questions.length; i++) {
 			var answer_value = (answers && answers[i] !== undefined && answers[i] !== null) ? answers[i] : "";
 			output += "<tr><td>" + escape_html(embodiment_questions[i]) + "</td><td>" + escape_html(answer_value) + "</td></tr>";
 		}
 
+		output += "<tr><th>Final SUS score</th><td><strong>" + (sus_score !== null ? sus_score : no_score) + "</strong></td></tr>";
 		output += "</tbody></table>";
 		return output;
 	}
@@ -1609,6 +1628,127 @@ $(document).ready(function() {
 		}
 
 		refresh_review_options();
+	}
+
+	function ensure_preloaded_list_entries(preload) {
+		var changed = false,
+			proband_container = $(".step_1 .first .list > :first-child"),
+			task_container = $(".step_1 .second .list > :first-child"),
+			proband_labels = preload.proband_labels || {},
+			task_labels = preload.task_labels || {},
+			proband_ids = [],
+			task_ids = [];
+
+		for (var p in proband_labels) {
+			if (proband_labels.hasOwnProperty(p)) {
+				proband_ids.push(p);
+			}
+		}
+		for (var t in task_labels) {
+			if (task_labels.hasOwnProperty(t)) {
+				task_ids.push(t);
+			}
+		}
+
+		$.each(preload.final_result || [], function(i, proband_result) {
+			if (proband_result && proband_result.proband && $.inArray(proband_result.proband, proband_ids) < 0) {
+				proband_ids.push(proband_result.proband);
+			}
+			$.each((proband_result && proband_result.tasks) || [], function(j, task) {
+				if (task && task.name && $.inArray(task.name, task_ids) < 0) {
+					task_ids.push(task.name);
+				}
+			});
+		});
+
+		$.each(proband_ids, function(i, id) {
+			if (!id || $(".step_1 .first .list input[id='" + id + "']").length) {
+				return;
+			}
+			proband_container.append(
+				"<div><input type='radio' name='probands' id='" + id + "'" + ($(".step_1 .first .list input[type='radio']").length ? "" : " checked") + "> <label class='proband-name' for='" + id + "'>" + escape_html(proband_labels[id] || id) + "</label> <button class='edit_proband' type='button' data-proband='" + id + "'>Edit</button> <button class='delete_proband' type='button' data-proband='" + id + "'>Delete</button></div>"
+			);
+			changed = true;
+		});
+
+		$.each(task_ids, function(i, id) {
+			if (!id || $(".step_1 .second .list input[id='" + id + "']").length) {
+				return;
+			}
+			task_container.append(
+				"<div><input type='radio' name='tasks' id='" + id + "'" + ($(".step_1 .second .list input[type='radio']").length ? "" : " checked") + "> <label for='" + id + "'>" + escape_html(task_labels[id] || id) + "</label> <button class='delete_task' type='button' data-task='" + id + "'>Delete</button></div>"
+			);
+			changed = true;
+		});
+
+		return changed;
+	}
+
+	function find_or_create_preloaded_proband(proband_id) {
+		for (var i = 0; i < final_result.length; i++) {
+			if (final_result[i].proband === proband_id) {
+				return final_result[i];
+			}
+		}
+
+		var entry = {
+			proband: proband_id,
+			tasks: []
+		};
+		final_result.push(entry);
+		return entry;
+	}
+
+	function has_preloaded_task(proband_result, task_id) {
+		var tasks = proband_result.tasks || [];
+		for (var i = 0; i < tasks.length; i++) {
+			if (tasks[i].name === task_id) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function normalize_preloaded_task(task) {
+		var copy = $.extend(true, {}, task);
+		copy.data = ensure_data_object(copy.data || {});
+		if (copy.additional) {
+			copy.additional = ensure_additional_data(copy.additional);
+		}
+		if (copy.embodiment) {
+			copy.embodiment = ensure_embodiment_data(copy.embodiment);
+		}
+		return copy;
+	}
+
+	function merge_preloaded_state() {
+		var preload = window.NASA_TLX_PRELOADED_STATE;
+		if (!preload || !preload.final_result || !$.isArray(preload.final_result)) {
+			return;
+		}
+
+		var changed = ensure_preloaded_list_entries(preload);
+		$.each(preload.final_result, function(i, preloaded_proband) {
+			if (!preloaded_proband || !preloaded_proband.proband) {
+				return;
+			}
+			var target = find_or_create_preloaded_proband(preloaded_proband.proband);
+			$.each(preloaded_proband.tasks || [], function(j, task) {
+				if (!task || !task.name || has_preloaded_task(target, task.name)) {
+					return;
+				}
+				target.tasks.push(normalize_preloaded_task(task));
+				changed = true;
+			});
+		});
+
+		if (changed) {
+			$(".step_0 p").remove();
+			render_overview();
+			update_export_state();
+			save_state();
+			refresh_review_options();
+		}
 	}
 
 	function save_state() {
@@ -2022,6 +2162,7 @@ $(document).ready(function() {
 
 		header.push("Product sum");
 		header.push("Weight sum");
+		header.push("SUS Score");
 		for (var q = 0; q < additional_questions.length; q++) {
 			header.push("Additional Q" + (q + 1));
 		}
@@ -2046,7 +2187,8 @@ $(document).ready(function() {
 					weight_sum = "",
 					tlx_score = (task.tlx !== undefined && task.tlx !== null) ? task.tlx : "",
 					additional_answers = (task.additional && task.additional.answers) ? task.additional.answers : [],
-					embodiment_answers = has_completed_embodiment_data(task) ? task.embodiment.answers : [];
+					embodiment_answers = has_completed_embodiment_data(task) ? task.embodiment.answers : [],
+					sus_score = has_completed_embodiment_data(task) ? calculate_sus_score(embodiment_answers) : "";
 
 				if (task.tlx === undefined || task.tlx === null) {
 					if (!additional_answers.length && !embodiment_answers.length) {
@@ -2087,6 +2229,7 @@ $(document).ready(function() {
 
 				row.push(sum);
 				row.push(weight_sum);
+				row.push(sus_score !== null ? sus_score : "");
 				for (var a = 0; a < additional_questions.length; a++) {
 					var additional_value = (additional_answers[a] !== undefined) ? additional_answers[a] : "";
 					if (is_additional_rank_question(a)) {
@@ -2112,6 +2255,7 @@ $(document).ready(function() {
 
 	$("<p>No data available yet.</p>").insertAfter(".step_0 h2");
 	restore_state();
+	merge_preloaded_state();
 	refresh_review_options();
 	update_export_state();
 	$("#edit_toggle").prop("disabled", true);
